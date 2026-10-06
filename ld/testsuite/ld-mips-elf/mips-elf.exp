@@ -518,6 +518,21 @@ if { $embedded_elf } {
 if { $irix } {
     run_dump_test_n64 "elf-rel-got-n64-irix"
     run_dump_test_n64 "elf-rel-xgot-n64-irix"
+
+    # IRIX 6.5 uses DT_MIPS_RLD_MAP, but predates DT_MIPS_RLD_MAP_REL.
+    run_ld_link_tests [list \
+	[list "IRIX shared library for RLD map test" \
+	      "$abi_ldflags(o32) -shared -soname libirix-rld-map-rel.so" "" \
+	      "$abi_asflags(o32)" \
+	      { dynamic-sections.s } \
+	      {} \
+	      "tmpdir/libirix-rld-map-rel.so"] \
+	[list "IRIX executable uses MIPS_RLD_MAP without REL tag" \
+	      "$abi_ldflags(o32) -call_shared -e foo -dynamic-linker /usr/lib/libc.so.1 --no-as-needed tmpdir/libirix-rld-map-rel.so" "" \
+	      "$abi_asflags(o32)" \
+	      { dynamic-sections.s } \
+	      { { readelf -d irix-rld-map-rel.d } } \
+	      "irix-rld-map-rel"]]
 } elseif { $embedded_elf } {
     run_dump_test_n64 "elf-rel-got-n64-embed" {{as -EB} {ld -EB}}
     run_dump_test_n64 "elf-rel-xgot-n64-embed" {{as -EB} {ld -EB}}

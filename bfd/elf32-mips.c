@@ -3813,7 +3813,11 @@ mips_elf32_object_p (bfd *abfd)
      sorted correctly such that local symbols precede global symbols,
      and the sh_info field in the symbol table is not always right.  */
   if (SGI_COMPAT (abfd))
-    elf_bad_symtab (abfd) = true;
+    {
+      elf_bad_symtab (abfd) = true;
+      if (!_bfd_mips_elf_fix_section_alignments (abfd))
+	return false;
+    }
 
   mach = _bfd_elf_mips_mach (elf_elfheader (abfd)->e_flags);
   bfd_default_set_arch_mach (abfd, bfd_arch_mips, mach);

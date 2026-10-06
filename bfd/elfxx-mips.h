@@ -97,6 +97,8 @@ extern asection * _bfd_mips_elf_gc_mark_hook
 extern void _bfd_mips_elf_copy_indirect_symbol
   (struct bfd_link_info *, struct elf_link_hash_entry *,
    struct elf_link_hash_entry *) ATTRIBUTE_HIDDEN;
+extern bool _bfd_mips_elf_fix_section_alignments (bfd *);
+
 extern void _bfd_mips_elf_hide_symbol
   (struct bfd_link_info *, struct elf_link_hash_entry *, bool) ATTRIBUTE_HIDDEN;
 extern bool _bfd_mips_elf_ignore_discarded_relocs

@@ -4623,6 +4623,22 @@ mips_elf_resolve_final_got_entries (struct bfd_link_info *info,
   return true;
 }
 
+/* Return true if H is a forced-local symbol, following any indirect or
+   warning symbol chain.  */
+
+static bool
+mips_is_entry_forced_local (struct mips_elf_link_hash_entry *h)
+{
+  if (!h)
+    return false;
+
+  while (h->root.root.type == bfd_link_hash_indirect
+	 || h->root.root.type == bfd_link_hash_warning)
+    h = (struct mips_elf_link_hash_entry *) h->root.root.u.i.link;
+
+  return h->root.forced_local;
+}
+
 /* Return true if a GOT entry for H should live in the local rather than
    global GOT area.  */
 
@@ -4645,9 +4661,11 @@ mips_use_local_got_p (struct bfd_link_info *info,
 
   /* Symbols that bind locally can (and in the case of forced-local
      symbols, must) live in the local GOT.  */
-  if (h->got_only_for_calls
-      ? SYMBOL_CALLS_LOCAL (info, &h->root)
-      : SYMBOL_REFERENCES_LOCAL (info, &h->root))
+  if ((h->got_only_for_calls
+       ? SYMBOL_CALLS_LOCAL (info, &h->root)
+       : SYMBOL_REFERENCES_LOCAL (info, &h->root))
+      && (!SGI_COMPAT (info->output_bfd)
+	  || mips_is_entry_forced_local (h)))
     return true;
 
   /* If this is an executable that must provide a definition of the symbol,
@@ -5216,10 +5234,12 @@ mips_elf_next_relocation (bfd *abfd ATTRIBUTE_UNUSED, unsigned int r_type,
 static bool
 mips_elf_local_relocation_p (bfd *input_bfd,
 			     const Elf_Internal_Rela *relocation,
-			     asection **local_sections)
+			     asection **local_sections,
+			     bool check_forced)
 {
   unsigned long r_symndx;
   Elf_Internal_Shdr *symtab_hdr;
+  struct mips_elf_link_hash_entry *h;
   size_t extsymoff;
 
   r_symndx = ELF_R_SYM (input_bfd, relocation->r_info);
@@ -5230,6 +5250,22 @@ mips_elf_local_relocation_p (bfd *input_bfd,
     return true;
   if (elf_bad_symtab (input_bfd) && local_sections[r_symndx] != NULL)
     return true;
+
+  if (check_forced)
+    {
+      /* Look up the hash table to check whether the symbol was forced
+	 local.  */
+      h = (struct mips_elf_link_hash_entry *)
+	elf_sym_hashes (input_bfd)[r_symndx - extsymoff];
+
+      /* Find the real hash-table entry for this symbol.  */
+      while (h->root.root.type == bfd_link_hash_indirect
+	     || h->root.root.type == bfd_link_hash_warning)
+	h = (struct mips_elf_link_hash_entry *) h->root.root.u.i.link;
+
+      if (h->root.forced_local)
+	return true;
+    }
 
   return false;
 }
@@ -5598,7 +5634,7 @@ mips_elf_calculate_relocation (bfd *abfd, bfd *input_bfd,
      used in the array of hash table entries.  */
   symtab_hdr = &elf_symtab_hdr (input_bfd);
   local_p = mips_elf_local_relocation_p (input_bfd, relocation,
-					 local_sections);
+					 local_sections, false);
   was_local_p = local_p;
   if (! elf_bad_symtab (input_bfd))
     extsymoff = symtab_hdr->sh_info;
@@ -5965,7 +6001,15 @@ mips_elf_calculate_relocation (bfd *abfd, bfd *input_bfd,
       break;
     }
 
-  local_p = (h == NULL || mips_use_local_got_p (info, h));
+  if (SGI_COMPAT (info->output_bfd))
+    local_p = (h == NULL
+	       || ((h->got_only_for_calls
+		    ? SYMBOL_CALLS_LOCAL (info, &h->root)
+		    : SYMBOL_REFERENCES_LOCAL (info, &h->root))
+		   && mips_elf_local_relocation_p (input_bfd, relocation,
+						   local_sections, true)));
+  else
+    local_p = (h == NULL || mips_use_local_got_p (info, h));
 
   gp0 = _bfd_get_gp_value (input_bfd);
   gp = _bfd_get_gp_value (abfd);
@@ -8126,8 +8170,11 @@ _bfd_mips_elf_create_dynamic_sections (bfd *abfd, struct bfd_link_info *info)
     return false;
   htab->sstubs = s;
 
-  if (!mips_elf_hash_table (info)->use_rld_obj_head
-      && bfd_link_executable (info)
+  /* IRIX5-compatible output keeps the .rld_map marker even when crt1.o
+     supplies __rld_obj_head; upstream e6aea42dfa removed that arm.  */
+  if (bfd_link_executable (info)
+      && (IRIX_COMPAT (abfd) == ict_irix5
+	  || !mips_elf_hash_table (info)->use_rld_obj_head)
       && bfd_get_linker_section (abfd, ".rld_map") == NULL)
     {
       s = bfd_make_section_anyway_with_flags (abfd, ".rld_map",
@@ -10293,7 +10340,11 @@ _bfd_mips_elf_late_size_sections (struct bfd_link_info *info)
 	  && !MIPS_ELF_ADD_DYNAMIC_ENTRY (info, DT_MIPS_RLD_MAP, 0))
 	return false;
 
+      /* IRIX 6.5 predates DT_MIPS_RLD_MAP_REL (added in 2015).  Keep
+	 the tag for generic MIPS/Linux, and leave SGI output at
+	 DT_MIPS_RLD_MAP.  */
       if (bfd_link_executable (info)
+	  && !SGI_COMPAT (info->output_bfd)
 	  && !MIPS_ELF_ADD_DYNAMIC_ENTRY (info, DT_MIPS_RLD_MAP_REL, 0))
 	return false;
 
@@ -10429,7 +10480,8 @@ mips_elf_adjust_addend (bfd *output_bfd, struct bfd_link_info *info,
   Elf_Internal_Sym *sym;
   asection *sec;
 
-  if (mips_elf_local_relocation_p (input_bfd, rel, local_sections))
+  if (mips_elf_local_relocation_p (input_bfd, rel, local_sections,
+				   false))
     {
       r_type = ELF_R_TYPE (output_bfd, rel->r_info);
       if (gprel16_reloc_p (r_type)
@@ -10544,7 +10596,8 @@ _bfd_mips_elf_relocate_section (struct bfd_link_info *info,
 
       r_symndx = ELF_R_SYM (input_bfd, rel->r_info);
       symtab_hdr = &elf_symtab_hdr (input_bfd);
-      if (mips_elf_local_relocation_p (input_bfd, rel, local_sections))
+      if (mips_elf_local_relocation_p (input_bfd, rel, local_sections,
+				   false))
 	{
 	  sec = local_sections[r_symndx];
 	  h = NULL;
@@ -10607,7 +10660,7 @@ _bfd_mips_elf_relocate_section (struct bfd_link_info *info,
 	      if (hi16_reloc_p (r_type)
 		  || (got16_reloc_p (r_type)
 		      && mips_elf_local_relocation_p (input_bfd, rel,
-						      local_sections))
+						      local_sections, false))
 		  || tls_hi16_reloc_p (r_type))
 		{
 		  if (!mips_elf_add_lo16_rel_addend (input_bfd, input_section,
@@ -13067,11 +13120,39 @@ _bfd_mips_elf_gc_mark_extra_sections (struct bfd_link_info *info,
   return true;
 }
 
+/* Normalise the section alignments of an SGI input file.
+
+   Upstream commit 1f9b1a84350d3755ce8620900a35c3d1997535e6 (Alan Modra,
+   2022-02-15) made _bfd_elf_make_section_from_shdr read a
+   non-power-of-two sh_addralign as its lowest set bit, so SGI's o32
+   crt1.o, whose .init has sh_addralign 27, becomes alignment 1 and the
+   loader's GOT entry for __istart lands at 2 mod 4, raising an address
+   error.  Older binutils used the largest power of two not exceeding the
+   value (16).  Restore that for SGI inputs only; valid alignments and
+   generic MIPS/Linux objects are untouched.  Modern bfd_log2 rounds up,
+   hence the -1 for a non-power value.  */
+
+bool
+_bfd_mips_elf_fix_section_alignments (bfd *abfd)
+{
+  asection *s;
+
+  for (s = abfd->sections; s != NULL; s = s->next)
+    {
+      bfd_vma align = elf_section_data (s)->this_hdr.sh_addralign;
+
+      if (align > 1 && (align & (align - 1)) != 0)
+	if (!bfd_set_section_alignment (s, bfd_log2 (align) - 1))
+	  return false;
+    }
+
+  return true;
+}
+
 /* Copy data from a MIPS ELF indirect symbol to its direct symbol,
    hiding the old indirect symbol.  Process additional relocation
    information.  Also called for weakdefs, in which case we just let
    _bfd_elf_link_hash_copy_indirect copy the flags for us.  */
-
 void
 _bfd_mips_elf_copy_indirect_symbol (struct bfd_link_info *info,
 				    struct elf_link_hash_entry *dir,
