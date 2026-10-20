@@ -15717,7 +15717,8 @@ is_32bit_abs_reloc (Filedata * filedata, unsigned int reloc_type)
       return reloc_type == 1; /* R_XSTROMY16_32.  */
     case EM_XTENSA_OLD:
     case EM_XTENSA:
-      return reloc_type == 1; /* R_XTENSA_32.  */
+      /* R_XTENSA_32 or R_XTENSA_32_ABS.  */
+      return reloc_type == 1 || reloc_type == 64;
     case EM_Z80:
       return reloc_type == 6; /* R_Z80_32.  */
     default:
@@ -22814,7 +22815,7 @@ print_stapsdt_note (Elf_Internal_Note *pnote)
   char *provider, *probe, *arg_fmt;
 
   if (pnote->descsz < (addr_size * 3))
-    goto stapdt_note_too_small;
+    goto too_small;
 
   pc = byte_get ((unsigned char *) data, addr_size);
   data += addr_size;
@@ -22826,7 +22827,7 @@ print_stapsdt_note (Elf_Internal_Note *pnote)
   data += addr_size;
 
   if (data >= data_end)
-    goto stapdt_note_too_small;
+    goto too_small;
   maxlen = data_end - data;
   len = strnlen (data, maxlen);
   if (len < maxlen)
@@ -22835,10 +22836,10 @@ print_stapsdt_note (Elf_Internal_Note *pnote)
       data += len + 1;
     }
   else
-    goto stapdt_note_too_small;
+    goto too_small;
 
   if (data >= data_end)
-    goto stapdt_note_too_small;
+    goto too_small;
   maxlen = data_end - data;
   len = strnlen (data, maxlen);
   if (len < maxlen)
@@ -22847,10 +22848,10 @@ print_stapsdt_note (Elf_Internal_Note *pnote)
       data += len + 1;
     }
   else
-    goto stapdt_note_too_small;
+    goto too_small;
 
   if (data >= data_end)
-    goto stapdt_note_too_small;
+    goto too_small;
   maxlen = data_end - data;
   len = strnlen (data, maxlen);
   if (len < maxlen)
@@ -22859,7 +22860,7 @@ print_stapsdt_note (Elf_Internal_Note *pnote)
       data += len + 1;
     }
   else
-    goto stapdt_note_too_small;
+    goto too_small;
 
   printf (_("    Provider: %s\n"), provider);
   printf (_("    Name: %s\n"), probe);
@@ -22874,9 +22875,9 @@ print_stapsdt_note (Elf_Internal_Note *pnote)
 
   return data == data_end;
 
- stapdt_note_too_small:
+ too_small:
   printf (_("  <corrupt - note is too small>\n"));
-  error (_("corrupt stapdt note - the data size is too small\n"));
+  error (_("corrupt stapsdt note - the data size is too small\n"));
   return false;
 }
 

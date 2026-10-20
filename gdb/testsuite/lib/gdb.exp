@@ -5688,6 +5688,61 @@ gdb_caching_proc allow_aarch64_gcs_tests {} {
     return $allow_gcs_tests
 }
 
+# Run a test on the target to see if it supports AArch64 POE extensions.
+# Return 1 if so, 0 if it does not.  Note this causes a restart of GDB.
+
+gdb_caching_proc allow_aarch64_poe_tests {} {
+    global srcdir subdir gdb_prompt inferior_exited_re
+
+    set me "allow_aarch64_poe_tests"
+
+    if {![is_aarch64_target]} {
+	return 0
+    }
+
+    # Compile a program that tests the POE feature.
+    set src {
+	#include <stdbool.h>
+	#include <sys/auxv.h>
+
+	/* Feature check for POE feature.  */
+	#ifndef HWCAP2_POE
+	#define HWCAP2_POE (1ULL << 63)
+	#endif
+
+	int main (void) {
+	    bool poe_supported = getauxval (AT_HWCAP2) & HWCAP2_POE;
+
+	    /* Return success if POE is supported.  */
+	    return !poe_supported;
+	}
+    }
+
+    if {![gdb_simple_compile $me $src executable]} {
+	return 0
+    }
+
+    # Compilation succeeded so now run it via gdb.
+    set allow_poe_tests 0
+    clean_restart
+    gdb_load $obj
+    gdb_run_cmd
+    gdb_expect {
+	-re ".*$inferior_exited_re normally.*${gdb_prompt} $" {
+	    verbose -log "\n$me: poe support detected"
+	    set allow_poe_tests 1
+	}
+	-re ".*$inferior_exited_re with code 01.*${gdb_prompt} $" {
+	    verbose -log "\n$me: poe support not detected"
+	}
+    }
+    gdb_exit
+
+    remote_file build delete $obj
+    verbose "$me: returning $allow_poe_tests" 2
+    return $allow_poe_tests
+}
+
 # A helper that compiles a test case to see if __int128 is supported.
 proc gdb_int128_helper {lang} {
     return [gdb_can_simple_compile "i128-for-$lang" {
@@ -10248,7 +10303,9 @@ proc find_core_file {pid} {
     } elseif {$pid != -1} {
 	lappend files core.$pid
     }
-    lappend files ${::testfile}.core
+    if {[info exists ::testfile]} {
+	lappend files ${::testfile}.core
+    }
     lappend files core
 
     foreach file $files {
@@ -12248,32 +12305,34 @@ gdb_caching_proc root_user {} {
 # for sections ".interp" or ".gnu_debuglink".
 
 proc section_get {exec section} {
-    global subdir
-    set tmp [standard_output_file section_get.tmp]
-    set objcopy_program [gdb_find_objcopy]
-
-    set command "exec $objcopy_program -O binary --set-section-flags $section=A --change-section-address $section=0 -j $section $exec $tmp"
-    verbose -log "command is $command"
-    set result [catch {{*}$command} output]
-    verbose -log "result is $result"
-    verbose -log "output is $output"
-    if {$result == 1} {
-	return ""
+    try {
+	set tmp [standard_output_file section_get.tmp]
+	set objcopy_program [gdb_find_objcopy]
+	set command "exec $objcopy_program -O binary --set-section-flags $section=A --change-section-address $section=0 -j $section $exec $tmp"
+	verbose -log "command is $command"
+	set result [catch {{*}$command} output]
+	verbose -log "result is $result"
+	verbose -log "output is $output"
+	if {$result == 1} {
+	    return ""
+	}
+	set fi [open $tmp]
+	fconfigure $fi -translation binary
+	set data [read $fi]
+	close $fi
+	# .interp has size $len + 1 but .gnu_debuglink contains garbage after
+	# \000.
+	set len [string first \000 $data]
+	if {$len < 0} {
+	    verbose -log "section $section not found"
+	    return ""
+	}
+	set retval [string range $data 0 [expr {$len - 1}]]
+	verbose -log "section $section is <$retval>"
+	return $retval
+    } finally {
+	file delete $tmp
     }
-    set fi [open $tmp]
-    fconfigure $fi -translation binary
-    set data [read $fi]
-    close $fi
-    file delete $tmp
-    # .interp has size $len + 1 but .gnu_debuglink contains garbage after \000.
-    set len [string first \000 $data]
-    if {$len < 0} {
-	verbose -log "section $section not found"
-	return ""
-    }
-    set retval [string range $data 0 [expr {$len - 1}]]
-    verbose -log "section $section is <$retval>"
-    return $retval
 }
 
 # Return true if we expect the build-id from FILENAME to be included
@@ -12458,6 +12517,35 @@ proc nop {args} {}
 proc unproc {p} {
     # Renaming to an empty string deletes proc P.
     uplevel 1 [list rename $p {}]
+}
+
+# Return 1 if SIG can be delivered to a spawn_id on board.
+proc remote_kill_spawn_id_p { board sig } {
+    if {$board == "host" || $board == "target"} {
+	if {[isremote $board]} {
+	    # For remote host/target, the spawn_id holds the pid of the ssh
+	    # session, so we'd end up sending signals to ssh instead.
+	    return 0
+	}
+    }
+
+    return 1
+}
+
+# Send SIG to PID on BOARD.
+proc remote_kill_spawn_id { board spawn_id sig } {
+    set pid [exp_pid -i $spawn_id]
+
+    if {![remote_kill_spawn_id_p $board $sig]} {
+	error "Can't send signal $sig to $pid on remote $board"
+    }
+
+    return [remote_exec $board "kill -$sig $pid"]
+}
+
+# Send SIG to GDB.
+proc kill_gdb { sig } {
+    return [remote_kill_spawn_id host $::gdb_spawn_id $sig]
 }
 
 require {tcl_version_at_least 8 6 2}
