@@ -16,6 +16,7 @@ EXTRA_EM_FILE=mipself
 # Note: use "x$var" not x"$var" in case directive in order to work around bug in bash 4.2
 case "x$EMULATION_NAME" in
 xelf32*n32*) ELFSIZE=32 ;;
+xelf_mips_haiku) ELFSIZE=32 ;;
 xelf64*) ELFSIZE=64 ;;
 x) ;;
 *) echo $0: unhandled emulation $EMULATION_NAME >&2; exit 1 ;;

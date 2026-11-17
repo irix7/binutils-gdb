@@ -24,4 +24,7 @@
    haiku kernel uses "/" to mean division.  (What a concept!)  */
 #define TE_Haiku 1
 
+/* MIPS: use the traditional (GNU/SVR4) object formats, as on Linux.  */
+#define TE_TMIPS 1
+
 #include "te-generic.h"
