@@ -453,6 +453,7 @@ ALL_64_EMULATION_SOURCES = \
 	eelf64tilegx.c \
 	eelf64tilegx_be.c \
 	eelf_mipsel_haiku.c \
+	eelf_mips_haiku.c \
 	eelf_x86_64.c \
 	eelf_x86_64_fbsd.c \
 	eelf_x86_64_haiku.c \
